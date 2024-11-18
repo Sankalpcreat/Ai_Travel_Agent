@@ -1,8 +1,12 @@
 langchain
 langchain-core
+langchain-ollama
+langchain-openai
 streamlit
 python-dotenv
 sendgrid
 serpapi
-openai  
-langchain-ollama 
+openai
+pydantic
+pydantic
+langgraph
