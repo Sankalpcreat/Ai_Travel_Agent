@@ -5,9 +5,15 @@ from langchain_core.tools import tool
 
 
 class AttractionsInput(BaseModel):
-    location: str = Field(description="Location coordinates in 'latitude,longitude' format (e.g., '48.8566,2.3522').")
-    radius: int = Field(1000, description="Search radius in meters. Default is 1000 (1 km).")
-    category: Optional[str] = Field("tourism", description="Type of attractions (e.g., 'tourism', 'museum', 'park').")
+    location: str = Field(
+        description="Location coordinates in 'latitude,longitude' format (e.g., '48.8566,2.3522')."
+    )
+    radius: int = Field(
+        1000, description="Search radius in meters. Default is 1000 (1 km)."
+    )
+    category: Optional[str] = Field(
+        "tourism", description="Type of attractions (e.g., 'tourism', 'museum', 'park')."
+    )
 
 
 class AttractionsInputSchema(BaseModel):
@@ -26,6 +32,8 @@ def attractions_finder(params: AttractionsInput):
         list: A list of attractions with details like name, type, latitude, longitude, and tags.
     """
     overpass_url = "https://overpass-api.de/api/interpreter"
+    
+    # Build the Overpass QL query
     query = f"""
     [out:json];
     (
@@ -37,21 +45,27 @@ def attractions_finder(params: AttractionsInput):
     """
 
     try:
+        # Make the HTTP request to the Overpass API
         response = requests.get(overpass_url, params={"data": query})
-        response.raise_for_status()
+        response.raise_for_status()  # Raise an exception for HTTP errors
+
+        # Parse the JSON response
         data = response.json()
 
+        # Extract and format the results
         results = []
         for element in data.get("elements", []):
             if "tags" in element:
-                results.append({
+                attraction = {
                     "name": element["tags"].get("name", "Unnamed"),
                     "type": element["tags"].get(params.category, "Unknown"),
-                    "lat": element.get("lat", element["center"]["lat"]),
-                    "lon": element.get("lon", element["center"]["lon"]),
-                    "details": element["tags"]
-                })
+                    "lat": element.get("lat", element.get("center", {}).get("lat")),
+                    "lon": element.get("lon", element.get("center", {}).get("lon")),
+                    "details": element["tags"],
+                }
+                results.append(attraction)
 
+        # Handle case where no attractions are found
         if not results:
             return {"message": "No attractions found for the given location and criteria."}
 
@@ -59,3 +73,5 @@ def attractions_finder(params: AttractionsInput):
 
     except requests.exceptions.RequestException as e:
         return {"error": f"An error occurred while fetching attractions: {str(e)}"}
+    except ValueError as e:
+        return {"error": f"An error occurred while parsing the response: {str(e)}"}

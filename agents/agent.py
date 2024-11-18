@@ -2,13 +2,13 @@ import os
 import requests
 import datetime
 import operator
-from typing import Annotated, TypedDict
 import json
+from typing import Annotated, TypedDict
 from dotenv import load_dotenv
 from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
-from resend import Emails  # Correct import
+from resend import Emails
 
 from agents.tools.flights_finder import flights_finder
 from agents.tools.hotels_finder import hotels_finder
@@ -24,66 +24,42 @@ class AgentState(TypedDict):
 
 
 TOOLS_SYSTEM_PROMPT = f"""You are a smart travel agency. Use the tools to look up information.
-    You are allowed to make multiple calls (either together or in sequence).
-    Only look up information when you are sure of what you want.
-    The current year is {CURRENT_YEAR}.
-    If you need to look up some information before asking a follow-up question, you are allowed to do that!
-    I want to have in your output links to hotels' websites and flights' websites (if possible).
-    I also want to include the logo of the hotel and the airline company (if possible).
-    In your output always include the price of the flight and the price of the hotel and the currency as well (if possible).
-    For attractions, include the name, type, and distance from the provided location.
-    """
+You are allowed to make multiple calls (either together or in sequence).
+Only look up information when you are sure of what you want.
+The current year is {CURRENT_YEAR}.
+Always include in your output:
+- Links to hotel and flight booking websites (if available).
+- The logo of the hotel and airline company (if available).
+- Prices and currency details for flights and hotels.
+- Details of attractions, including their name, type, and distance from the given location.
+"""
 
-TOOLS = [flights_finder, hotels_finder, attractions_finder]
+TOOLS = {
+    "flights_finder": flights_finder,
+    "hotels_finder": hotels_finder,
+    "attractions_finder": attractions_finder,
+}
 
 EMAILS_SYSTEM_PROMPT = """Your task is to convert structured markdown-like text into a valid HTML email body.
 
-- Do not include a ```html preamble in your response.
 - The output should be in proper HTML format, ready to be used as the body of an email.
-Here is an example:
-<example>
-Input:
+- Include the information from flight, hotel, and attraction searches.
 
-I want to travel to New York from Madrid from October 1-7. Find me flights and 4-star hotels.
-
-Expected Output:
-
+Example:
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Flight and Hotel Options</title>
+    <title>Travel Information</title>
 </head>
 <body>
-    <h2>Flights from Madrid to New York</h2>
-    <ol>
-        <li>
-            <strong>American Airlines</strong><br>
-            <strong>Departure:</strong> Adolfo Suárez Madrid–Barajas Airport (MAD) at 10:25 AM<br>
-            <strong>Arrival:</strong> John F. Kennedy International Airport (JFK) at 12:25 PM<br>
-            <strong>Duration:</strong> 8 hours<br>
-            <strong>Aircraft:</strong> Boeing 777<br>
-            <strong>Class:</strong> Economy<br>
-            <strong>Price:</strong> $702<br>
-            <img src="https://www.gstatic.com/flights/airline_logos/70px/AA.png" alt="American Airlines"><br>
-            <a href="https://www.google.com/flights">Book on Google Flights</a>
-        </li>
-    </ol>
-
-    <h2>4-Star Hotels in New York</h2>
-    <ol>
-        <li>
-            <strong>NobleDen Hotel</strong><br>
-            <strong>Description:</strong> Modern, polished hotel offering sleek rooms, some with city-view balconies, plus free Wi-Fi.<br>
-            <strong>Rate per Night:</strong> $537<br>
-            <strong>Total Rate:</strong> $3,223<br>
-            <img src="https://lh5.googleusercontent.com/p/AF1QipNDUrPJwBhc9ysDhc8LA822H1ZzapAVa-WDJ2d6=s287-w287-h192-n-k-no-v1" alt="NobleDen Hotel"><br>
-            <a href="http://www.nobleden.com/">Visit Website</a>
-        </li>
-    </ol>
+    <h2>Flight Details</h2>
+    <!-- Include flight details -->
+    <h2>Hotel Details</h2>
+    <!-- Include hotel details -->
+    <h2>Attraction Details</h2>
+    <!-- Include attraction details -->
 </body>
 </html>
-
-</example>
 """
 
 
@@ -91,45 +67,28 @@ class Agent:
     OLLAMA_URL = "http://localhost:11434/"
 
     def __init__(self):
-        self._tools = {t.name: t for t in TOOLS}
+        self._tools = TOOLS
 
         builder = StateGraph(AgentState)
         builder.add_node("call_tools_llm", self.call_tools_llm)
-        builder.add_node("invoke_tools", self.invoke_tools)
         builder.add_node("email_sender", self.email_sender)
         builder.set_entry_point("call_tools_llm")
 
-        builder.add_conditional_edges(
-            "call_tools_llm",
-            Agent.exists_action,
-            {"more_tools": "invoke_tools", "email_sender": "email_sender"},
-        )
-        builder.add_edge("invoke_tools", "call_tools_llm")
+        builder.add_edge("call_tools_llm", "email_sender")
         builder.add_edge("email_sender", END)
         memory = MemorySaver()
         self.graph = builder.compile(checkpointer=memory, interrupt_before=["email_sender"])
 
         print(self.graph.get_graph().draw_mermaid())
 
-    @staticmethod
-    def exists_action(state: AgentState):
-        last_message = state["messages"][-1]
-
-        if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-            return "more_tools"
-        return "email_sender"
-
     def email_sender(self, state: AgentState):
-        """
-        Send an email using Resend's Emails class.
-        """
         print("Sending email using Resend")
-        email_response = self.invoke_llama(
-            EMAILS_SYSTEM_PROMPT + "\n\n" + state["messages"][-1].content
-        )
-        print("Email content:", email_response)
-
         try:
+            email_response = self.invoke_llama(
+                EMAILS_SYSTEM_PROMPT + "\n\n" + state["messages"][-1].content
+            )
+            print("Email content:", email_response)
+
             response = Emails.send(
                 api_key=os.getenv("RESEND_API_KEY"),
                 from_email=os.getenv("FROM_EMAIL"),
@@ -146,70 +105,41 @@ class Agent:
         input_prompt = TOOLS_SYSTEM_PROMPT + "\n\n" + "\n".join(
             [msg.content for msg in messages]
         )
+        print(f"Input Prompt to LLM: {input_prompt}")
         response = self.invoke_llama(input_prompt)
 
-        try:
-            response_data = json.loads(response)
-            if "tool_calls" in response_data:
-                return {"messages": [SystemMessage(content=response)]}
-            else:
-                return {"messages": [SystemMessage(content="No tool calls generated.")]}
-        except json.JSONDecodeError:
-            print("Error decoding LLM response.")
-            return {"messages": [SystemMessage(content="Error processing LLM response.")]}
-
-    def invoke_tools(self, state: AgentState):
-        last_message = state["messages"][-1]
-
-        if not hasattr(last_message, "tool_calls"):
-            print(f"Error: Message does not have 'tool_calls': {last_message}")
-            return {"messages": [SystemMessage(content="No tools to invoke.")]}
-        
-        tool_calls = last_message.tool_calls
-        results = []
-
-        for t in tool_calls:
-            print(f"Invoking tool: {t}")
-            if t["name"] not in self._tools:
-                print("Invalid tool name.")
-                result = "Error: Invalid tool name, retry."
-            else:
-                result = self._tools[t["name"]].invoke(t["args"])
-            results.append(
-                ToolMessage(tool_call_id=t["id"], name=t["name"], content=str(result))
-            )
-        print("Returning to the model.")
-        return {"messages": results}
+        print(f"Raw LLM response: {response}")
+        # Since the LLM returns plain text, we can directly create a SystemMessage
+        return {"messages": [SystemMessage(content=response)]}
 
     def invoke_llama(self, prompt: str) -> str:
-        """
-        Send a prompt to the locally hosted Llama API and process the streaming response.
-        """
         headers = {"Content-Type": "application/json"}
         payload = {"model": "llama3.2:latest", "prompt": prompt}
 
         try:
             response = requests.post(
-                "http://localhost:11434/api/generate",
+                self.OLLAMA_URL + "api/generate",
                 json=payload,
                 headers=headers,
                 stream=True,
             )
             response.raise_for_status()
-            generated_text = ""
 
+            full_response = ''
             for line in response.iter_lines():
                 if line:
+                    decoded_line = line.decode("utf-8")
                     try:
-                        data = json.loads(line.decode("utf-8"))
-                        generated_text += data.get("response", "")
-                        if data.get("done", False):
+                        json_data = json.loads(decoded_line)
+                        full_response += json_data.get('response', '')
+                        if json_data.get("done", False):
                             break
-                    except json.JSONDecodeError as e:
-                        print("Error decoding line:", line.decode("utf-8"), f"Error: {e}")
+                    except json.JSONDecodeError:
+                        print(f"JSON decode error for line: {decoded_line}")
                         continue
+            return full_response.strip()
 
-            return generated_text.strip()
         except requests.exceptions.RequestException as e:
             print(f"Error communicating with Llama: {e}")
             return "Error communicating with the language model."
+

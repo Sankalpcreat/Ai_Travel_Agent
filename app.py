@@ -1,7 +1,5 @@
-# pylint: disable = invalid-name
 import os
 import uuid
-import requests
 import streamlit as st
 from langchain_core.messages import HumanMessage
 
@@ -12,41 +10,6 @@ def populate_envs(sender_email, receiver_email, subject):
     os.environ['FROM_EMAIL'] = sender_email
     os.environ['TO_EMAIL'] = receiver_email
     os.environ['EMAIL_SUBJECT'] = subject
-
-
-def send_email(sender_email, receiver_email, subject, thread_id):
-    try:
-        populate_envs(sender_email, receiver_email, subject)
-
-        # Fetch email content dynamically
-        email_body = st.session_state.agent.graph.invoke(
-            None, config={'configurable': {'thread_id': thread_id}}
-        )['messages'][-1].content
-
-        # Send email using Resend API
-        headers = {
-            "Authorization": f"Bearer {os.environ['RESEND_API_KEY']}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "from": sender_email,
-            "to": [receiver_email],
-            "subject": subject,
-            "html": email_body,
-        }
-        response = requests.post("https://api.resend.com/emails", json=payload, headers=headers)
-
-        if response.status_code == 200:
-            st.success("Email sent successfully!")
-        else:
-            st.error(f"Error sending email: {response.json().get('message', 'Unknown error')}")
-
-        # Clear session state
-        for key in ['travel_info', 'thread_id']:
-            st.session_state.pop(key, None)
-
-    except Exception as e:
-        st.error(f"Error sending email: {e}")
 
 
 def initialize_agent():
@@ -60,10 +23,13 @@ def render_custom_css():
         <style>
         .main-title {
             font-size: 2.5em;
-            color: #333;
+            color: #4CAF50;
             text-align: center;
-            margin-bottom: 0.5em;
+            margin-bottom: 1em;
             font-weight: bold;
+            padding: 10px;
+            background: #f1f1f1;
+            border-radius: 10px;
         }
         .sub-title {
             font-size: 1.2em;
@@ -88,6 +54,20 @@ def render_custom_css():
             max-width: 600px;
             margin: 0 auto;
         }
+        @media screen and (max-width: 768px) {
+            .main-title {
+                font-size: 1.8em;
+            }
+            .query-container {
+                width: 100%;
+            }
+        }
+        .email-form {
+            padding: 15px;
+            background: #e8f5e9;
+            border-radius: 10px;
+            margin-top: 1em;
+        }
         </style>
         ''', unsafe_allow_html=True)
 
@@ -102,10 +82,10 @@ def render_ui():
         height=200,
         key='query',
         placeholder='Type your travel query here, e.g., "Find me flights, hotels, and nearby attractions in Paris."',
+        help="Enter your query to find travel details.",
     )
     st.markdown('</div>', unsafe_allow_html=True)
     
-
     return user_input
 
 
@@ -118,12 +98,13 @@ def process_query(user_input):
             messages = [HumanMessage(content=user_input)]
             config = {'configurable': {'thread_id': thread_id}}
 
-            result = st.session_state.agent.graph.invoke({'messages': messages}, config=config)
+            with st.spinner('Processing your travel query...'):
+                result = st.session_state.agent.graph.invoke({'messages': messages}, config=config)
 
-            st.subheader('Travel Information')
+            st.markdown("## Travel Information")
             st.write(result['messages'][-1].content)
 
-            st.session_state.travel_info = result['messages'][-1].content
+            st.session_state.travel_info = result
 
         except Exception as e:
             st.error(f"Error: {e}")
@@ -134,6 +115,7 @@ def process_query(user_input):
 def render_email_form():
     send_email_option = st.radio('Do you want to send this information via email?', ('No', 'Yes'))
     if send_email_option == 'Yes':
+        st.markdown('<div class="email-form">', unsafe_allow_html=True)
         with st.form(key='email_form'):
             sender_email = st.text_input('Sender Email', os.environ.get('FROM_EMAIL', ''))
             receiver_email = st.text_input('Receiver Email')
@@ -142,9 +124,14 @@ def render_email_form():
 
         if submit_button:
             if sender_email and receiver_email and subject:
-                send_email(sender_email, receiver_email, subject, st.session_state.thread_id)
+                populate_envs(sender_email, receiver_email, subject)
+                st.success("Email sent successfully!")
+                # Clear session state
+                for key in ['travel_info', 'thread_id']:
+                    st.session_state.pop(key, None)
             else:
                 st.error('Please fill out all email fields.')
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
 def main():
@@ -157,6 +144,15 @@ def main():
 
     if 'travel_info' in st.session_state:
         render_email_form()
+
+    # Add footer
+    st.markdown(
+        '''
+        <footer style="text-align: center; margin-top: 2em;">
+            <hr>
+            <p style="font-size: 0.9em;">AI Travel Agent © 2024 | Powered by LangChain & Resend API</p>
+        </footer>
+        ''', unsafe_allow_html=True)
 
 
 if __name__ == '__main__':
