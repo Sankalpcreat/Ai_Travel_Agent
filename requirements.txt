@@ -4,9 +4,8 @@ langchain-ollama
 langchain-openai
 streamlit
 python-dotenv
-sendgrid
+resend
 serpapi
 openai
-pydantic
 pydantic
 langgraph

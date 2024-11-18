@@ -1,6 +1,6 @@
 import requests
 from typing import Optional
-from langchain.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 
 
@@ -16,8 +16,15 @@ class AttractionsInputSchema(BaseModel):
 
 @tool(args_schema=AttractionsInputSchema)
 def attractions_finder(params: AttractionsInput):
-  
-    
+    """
+    Find nearby attractions using OpenStreetMap's Overpass API.
+
+    Args:
+        params (AttractionsInput): Parameters for finding attractions, including location coordinates, radius, and category.
+
+    Returns:
+        list: A list of attractions with details like name, type, latitude, longitude, and tags.
+    """
     overpass_url = "https://overpass-api.de/api/interpreter"
     query = f"""
     [out:json];
@@ -30,12 +37,10 @@ def attractions_finder(params: AttractionsInput):
     """
 
     try:
-        
         response = requests.get(overpass_url, params={"data": query})
-        response.raise_for_status()  # Raise exception for HTTP errors
+        response.raise_for_status()
         data = response.json()
 
-        
         results = []
         for element in data.get("elements", []):
             if "tags" in element:
@@ -53,9 +58,4 @@ def attractions_finder(params: AttractionsInput):
         return results
 
     except requests.exceptions.RequestException as e:
-        
         return {"error": f"An error occurred while fetching attractions: {str(e)}"}
-
-    except KeyError as e:
-        
-        return {"error": f"Unexpected data format: {str(e)}"}

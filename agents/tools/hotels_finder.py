@@ -1,9 +1,9 @@
 import os
 from typing import Optional
-
-import serpapi
-from langchain.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 from langchain_core.tools import tool
+import serpapi
+
 
 class HotelsInput(BaseModel):
     q: str = Field(description="Location of the hotel (e.g., 'Paris, France').")
@@ -15,18 +15,26 @@ class HotelsInput(BaseModel):
     rooms: Optional[int] = Field(1, description="Number of rooms. Default: 1.")
     hotel_class: Optional[str] = Field(None, description="Filter by hotel class (e.g., '2', '3', '4' stars). Default: None.")
 
+
 class HotelsInputSchema(BaseModel):
     params: HotelsInput
 
+
 @tool(args_schema=HotelsInputSchema)
 def hotels_finder(params: HotelsInput):
-    
-    # Retrieve API key from environment variables
+    """
+    Find hotels using the Google Hotels engine via SerpAPI.
+
+    Args:
+        params (HotelsInput): Parameters for hotel search, including location, check-in/out dates, and preferences.
+
+    Returns:
+        list: A list of hotel options with details like name, price, rating, and booking link.
+    """
     api_key = os.getenv("SERPAPI_API_KEY")
     if not api_key:
         return {"error": "SERPAPI_API_KEY is missing. Please set it in your .env file."}
 
-    # Build the query parameters
     query_params = {
         "api_key": api_key,
         "engine": "google_hotels",
@@ -44,29 +52,23 @@ def hotels_finder(params: HotelsInput):
     }
 
     try:
-        # Perform the search request
         search = serpapi.search(query_params)
         results = search.data
 
         if "properties" not in results:
-            return {"error": "No results found for the given criteria."}
+            return {"message": "No hotels found for the given criteria."}
 
-        # Extract top 5 properties
-        hotels = results["properties"][:5]
-
-        
-        formatted_hotels = []
-        for hotel in hotels:
-            formatted_hotels.append({
+        return [
+            {
                 "name": hotel.get("title"),
                 "price": hotel.get("price"),
                 "rating": hotel.get("rating"),
                 "reviews_count": hotel.get("reviews_count"),
                 "address": hotel.get("address"),
                 "url": hotel.get("link"),
-            })
-
-        return formatted_hotels
+            }
+            for hotel in results["properties"][:5]
+        ]
 
     except Exception as e:
-        return {"error": f"An error occurred while fetching hotel data: {str(e)}"}
+        return {"error": f"An error occurred while fetching hotel data:{str(e)}"}

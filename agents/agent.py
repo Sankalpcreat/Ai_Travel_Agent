@@ -1,18 +1,18 @@
-import datetime
-import operator
 import os
 import requests
+import datetime
+import operator
 from typing import Annotated, TypedDict
 
 from dotenv import load_dotenv
 from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
-from resend import Resend  
+from resend import Emails  # Correct import
 
 from agents.tools.flights_finder import flights_finder
 from agents.tools.hotels_finder import hotels_finder
-from agents.tools.attractions_finder import attractions_finder  # Import the new tool
+from agents.tools.attractions_finder import attractions_finder
 
 _ = load_dotenv()
 
@@ -88,6 +88,96 @@ Expected Output:
 
 
 class Agent:
+    OLLAMA_URL = "http://localhost:11434/"  # Updated to the correct endpoint
+
+    def __init__(self):
+        self._tools = {t.name: t for t in TOOLS}
+
+        builder = StateGraph(AgentState)
+        builder.add_node("call_tools_llm", self.call_tools_llm)
+        builder.add_node("invoke_tools", self.invoke_tools)
+        builder.add_node("email_sender", self.email_sender)
+        builder.set_entry_point("call_tools_llm")
+
+        builder.add_conditional_edges(
+            "call_tools_llm",
+            Agent.exists_action,
+            {"more_tools": "invoke_tools", "email_sender": "email_sender"},
+        )
+        builder.add_edge("invoke_tools", "call_tools_llm")
+        builder.add_edge("email_sender", END)
+        memory = MemorySaver()
+        self.graph = builder.compile(checkpointer=memory, interrupt_before=["email_sender"])
+
+        print(self.graph.get_graph().draw_mermaid())
+
+    @staticmethod
+    def exists_action(state: AgentState):
+        result = state["messages"][-1]
+        if len(result.tool_calls) == 0:
+            return "email_sender"
+        return "more_tools"
+
+    def email_sender(self, state: AgentState):
+        """
+        Send an email using Resend's Emails class.
+        """
+        print("Sending email using Resend")
+        email_response = self.invoke_llama(
+            EMAILS_SYSTEM_PROMPT + "\n\n" + state["messages"][-1].content
+        )
+        print("Email content:", email_response)
+
+        try:
+            # Use Emails class to send the email
+            response = Emails.send(
+                api_key=os.getenv("RESEND_API_KEY"),
+                from_email=os.getenv("FROM_EMAIL"),
+                to=[os.getenv("TO_EMAIL")],
+                subject=os.getenv("EMAIL_SUBJECT"),
+                html=email_response,
+            )
+            print("Email sent successfully:", response)
+        except Exception as e:
+            print(f"Error sending email with Resend: {e}")
+
+    def call_tools_llm(self, state: AgentState):
+        messages = state["messages"]
+        input_prompt = TOOLS_SYSTEM_PROMPT + "\n\n" + "\n".join(
+            [msg.content for msg in messages]
+        )
+        response = self.invoke_llama(input_prompt)
+        return {"messages": [SystemMessage(content=response)]}
+
+    def invoke_tools(self, state: AgentState):
+        tool_calls = state["messages"][-1].tool_calls
+        results = []
+        for t in tool_calls:
+            print(f"Calling: {t}")
+            if t["name"] not in self._tools:  # Check for bad tool name from LLM
+                print("\n ....bad tool name....")
+                result = "bad tool name, retry"  # Instruct LLM to retry if bad
+            else:
+                result = self._tools[t["name"]].invoke(t["args"])
+            results.append(
+                ToolMessage(tool_call_id=t["id"], name=t["name"], content=str(result))
+            )
+        print("Back to the model!")
+        return {"messages": results}
+
+    def invoke_llama(self, prompt: str) -> str:
+        """
+        Send a prompt to the locally hosted Llama 3.2 API and return the response.
+        """
+        headers = {"Content-Type": "application/json"}
+        payload = {"model": "llama3.2:latest", "prompt": prompt}
+        try:
+            response = requests.post(self.OLLAMA_URL, json=payload, headers=headers)
+            response.raise_for_status()  # Raise an exception for HTTP errors
+            return response.json()["response"]  # Update to match the response format
+        except requests.exceptions.RequestException as e:
+            print(f"Error communicating with Llama: {e}")
+            return "Error communicating with the language model."
     OLLAMA_URL = "http://localhost:11434/"  # Updated to the correct endpoint
 
     def __init__(self):

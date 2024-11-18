@@ -1,8 +1,9 @@
 import os
 from typing import Optional
-import serpapi  
-from langchain.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 from langchain_core.tools import tool
+import serpapi
+
 
 class FlightsInput(BaseModel):
     departure_airport: Optional[str] = Field(description="Departure airport code (IATA).")
@@ -18,54 +19,57 @@ class FlightsInput(BaseModel):
 class FlightsInputSchema(BaseModel):
     params: FlightsInput
 
+
 @tool(args_schema=FlightsInputSchema)
 def flights_finder(params: FlightsInput):
-    
-    
+    """
+    Find flights using the Google Flights engine via SerpAPI.
+
+    Args:
+        params (FlightsInput): Parameters for flight search, including departure/arrival airports, dates, and passenger details.
+
+    Returns:
+        list: A list of flight options with details like airline, price, duration, and booking link.
+    """
     api_key = os.getenv("SERPAPI_API_KEY")
     if not api_key:
         return {"error": "SERPAPI_API_KEY is missing. Please set it in your .env file."}
 
-    
     query_params = {
         "api_key": api_key,
         "engine": "google_flights",
-        "hl": "en", 
+        "hl": "en",
         "gl": "us",
         "departure_id": params.departure_airport,
         "arrival_id": params.arrival_airport,
         "outbound_date": params.outbound_date,
         "return_date": params.return_date,
-        "currency": "USD", 
+        "currency": "USD",
         "adults": params.adults,
         "children": params.children,
         "infants_in_seat": params.infants_in_seat,
         "infants_on_lap": params.infants_on_lap,
-        "stops": "1",  
+        "stops": "1",
     }
 
     try:
-        
         search = serpapi.search(query_params)
         results = search.data.get("best_flights", [])
         if not results:
             return {"message": "No flights found for the given criteria."}
 
-       
-        formatted_results = []
-        for flight in results:
-            formatted_results.append({
+        return [
+            {
                 "airline": flight.get("airline"),
                 "price": flight.get("price"),
                 "departure_time": flight.get("departure_time"),
                 "arrival_time": flight.get("arrival_time"),
                 "duration": flight.get("duration"),
                 "stops": flight.get("stops"),
-                "link": flight.get("booking_link"),  
-            })
-
-        return formatted_results
+                "link": flight.get("booking_link"),
+            }
+            for flight in results
+        ]
 
     except Exception as e:
-        
         return {"error": f"An error occurred while fetching flight data: {str(e)}"}
