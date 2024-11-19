@@ -142,3 +142,4 @@ class Agent:
         except requests.exceptions.RequestException as e:
             print(f"Error communicating with Llama: {e}")
             return "Error communicating with the language model."
+        
