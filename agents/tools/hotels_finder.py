@@ -38,7 +38,7 @@ def hotels_finder(params: HotelsInput):
         list: A list of hotels with details like name, price, rating, address, and link.
     """
     api_key = os.getenv("SERPAPI_API_KEY")
-    if not api_key:
+    if not api_key: 
         return {"error": "SERPAPI_API_KEY is missing. Please set it in your environment variables."}
 
     # Mapping sort_by values to SerpApi's expected values
